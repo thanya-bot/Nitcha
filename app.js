@@ -296,6 +296,8 @@ function syncBookingToSheet(b) {
 // คาดว่าชีตมีคอลัมน์: service, size, price
 // service = clean | repair | install ; size = 9000/12000/18000/24000/36000/48000
 function parseCsv(text) {
+  // ลบ BOM ที่ Google CSV มักใส่มา
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const rows = [];
   let row = [], cell = '', inQ = false;
   for (let i = 0; i < text.length; i++) {
@@ -337,14 +339,33 @@ function formatBtuLabel(key) {
   return n.toLocaleString('en-US') + ' BTU';
 }
 
+async function fetchCsvWithFallback(url) {
+  // 1) ลองตรง
+  try {
+    const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+    if (r.ok) {
+      const text = await r.text();
+      if (text && text.length > 0) return { text, via: 'direct' };
+    }
+    console.warn('direct fetch returned', r.status);
+  } catch (e) {
+    console.warn('direct fetch failed:', e.message);
+  }
+  // 2) Fallback ผ่าน CORS proxy สาธารณะ
+  const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
+  const r2 = await fetch(proxied, { cache: 'no-store' });
+  if (!r2.ok) throw new Error('Proxy HTTP ' + r2.status);
+  const text = await r2.text();
+  return { text, via: 'corsproxy.io' };
+}
+
 async function loadRatesFromSheet(silent) {
   const status = $('sheetStatus');
   if (status && !silent) status.textContent = 'กำลังโหลดราคาจากชีต...';
   try {
     const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
+    const { text, via } = await fetchCsvWithFallback(url);
+    console.log('[rates] fetched via', via, '— bytes:', text.length);
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
 
@@ -403,13 +424,19 @@ async function loadRatesFromSheet(silent) {
     const stamp = new Date().toLocaleTimeString('th-TH');
     if (status) status.textContent = `อัปเดตราคาล่าสุด • ${Object.keys(SERVICES).length} บริการ × ${SIZES.length} ขนาด • ${stamp}`;
     const mini = $('ratesStatus');
-    if (mini) mini.textContent = `ราคาอัปเดตจาก Google Sheet • ${stamp}`;
+    if (mini) {
+      mini.textContent = `✓ ราคาอัปเดตจาก Google Sheet • ${stamp}`;
+      mini.style.color = '#166534';
+    }
     renderItems();
   } catch (err) {
+    console.error('loadRatesFromSheet failed:', err);
     if (status) status.textContent = 'โหลดไม่สำเร็จ: ' + err.message;
     const mini = $('ratesStatus');
-    if (mini) mini.textContent = 'ใช้ราคาสำรอง (โหลดชีตไม่สำเร็จ)';
-    if (!silent) console.warn('loadRatesFromSheet:', err);
+    if (mini) {
+      mini.textContent = '⚠ โหลดราคาจากชีตไม่สำเร็จ: ' + err.message + ' (ใช้ราคาสำรอง)';
+      mini.style.color = '#B91C1C';
+    }
   }
 }
 
@@ -768,11 +795,17 @@ document.addEventListener('DOMContentLoaded', () => {
   renderItems();
   updateHistoryCount();
 
-  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 30 วินาที
+  // ปุ่มรีโหลดบนการ์ดสรุป
+  const reloadBtn = $('reloadRatesBtn');
+  if (reloadBtn) reloadBtn.addEventListener('click', () => loadRatesFromSheet(false));
+
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 10 วินาที (เรียลไทม์)
   loadRatesFromSheet(true);
-  setInterval(() => loadRatesFromSheet(true), 30000);
-  // ดึงใหม่เมื่อผู้ใช้สลับกลับมาที่แท็บ
+  setInterval(() => loadRatesFromSheet(true), 10000);
+  // ดึงใหม่ทันทีเมื่อผู้ใช้สลับกลับมาที่แท็บ / โฟกัสหน้าต่าง
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) loadRatesFromSheet(true);
   });
+  window.addEventListener('focus', () => loadRatesFromSheet(true));
+  window.addEventListener('online', () => loadRatesFromSheet(true));
 });
