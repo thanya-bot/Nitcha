@@ -316,36 +316,72 @@ function parseCsv(text) {
   return rows.filter(r => r.some(v => String(v).trim() !== ''));
 }
 
-async function loadRatesFromSheet() {
+// แปลงชื่อบริการในชีต → key ใน SERVICES
+function normalizeServiceKey(s) {
+  const v = String(s || '').trim().toLowerCase();
+  if (!v) return null;
+  if (/(wash|clean|ล้าง)/.test(v)) return 'clean';
+  if (/(repair|fix|ซ่อม)/.test(v)) return 'repair';
+  if (/(install|ติดตั้ง)/.test(v)) return 'install';
+  return null;
+}
+
+// ดึงเฉพาะตัวเลขจาก header (เช่น "9,000 BTU" → "9000", "12000" → "12000")
+function normalizeSizeKey(s) {
+  const digits = String(s || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  // ถ้าน้อยกว่า 4 หลัก เช่น "9" "12" "18" ให้คูณ 1000
+  let n = Number(digits);
+  if (n > 0 && n < 100) n = n * 1000;
+  const key = String(n);
+  return SIZES.some(s => s.value === key) ? key : null;
+}
+
+async function loadRatesFromSheet(silent) {
   const status = $('sheetStatus');
-  status.textContent = 'กำลังโหลดราคาจากชีต...';
+  if (status && !silent) status.textContent = 'กำลังโหลดราคาจากชีต...';
   try {
-    const res = await fetch(SHEET_CSV_URL, { cache: 'no-store' });
+    const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
-    const header = rows[0].map(h => h.trim().toLowerCase());
-    const iSvc = header.indexOf('service');
-    const iSize = header.indexOf('size');
-    const iPrice = header.indexOf('price');
-    if (iSvc < 0 || iSize < 0 || iPrice < 0) {
-      throw new Error('ต้องมีคอลัมน์ service, size, price ในแถวแรก');
+
+    // ตาราง pivot: แถวแรก = ขนาด BTU (col 0 อาจเป็น label/ว่าง), แต่ละแถวถัดมา = บริการ + ราคา
+    const header = rows[0];
+    const sizeCols = []; // {col, sizeKey}
+    for (let c = 1; c < header.length; c++) {
+      const sz = normalizeSizeKey(header[c]);
+      if (sz) sizeCols.push({ col: c, sizeKey: sz });
     }
+    if (sizeCols.length === 0) throw new Error('ไม่พบคอลัมน์ขนาด BTU ในแถวบนสุด');
+
     let count = 0;
     for (let r = 1; r < rows.length; r++) {
-      const svc = (rows[r][iSvc] || '').trim();
-      const size = (rows[r][iSize] || '').trim();
-      const price = Number(String(rows[r][iPrice]).replace(/[^\d.-]/g, ''));
-      if (SERVICES[svc] && size && !Number.isNaN(price)) {
-        SERVICES[svc].rates[size] = price;
-        count++;
+      const svcKey = normalizeServiceKey(rows[r][0]);
+      if (!svcKey) continue;
+      for (const { col, sizeKey } of sizeCols) {
+        const raw = rows[r][col];
+        if (raw == null || String(raw).trim() === '') continue;
+        const price = Number(String(raw).replace(/[^\d.-]/g, ''));
+        if (!Number.isNaN(price) && price >= 0) {
+          SERVICES[svcKey].rates[sizeKey] = price;
+          count++;
+        }
       }
     }
-    status.textContent = `โหลดสำเร็จ — อัปเดต ${count} รายการราคา (${new Date().toLocaleTimeString('th-TH')})`;
+    if (count === 0) throw new Error('ไม่พบราคาที่ตรงกับรูปแบบ (บริการ × BTU)');
+    const stamp = new Date().toLocaleTimeString('th-TH');
+    if (status) status.textContent = `อัปเดตราคาล่าสุด ${count} ช่อง • ${stamp}`;
+    const mini = $('ratesStatus');
+    if (mini) mini.textContent = `ราคาอัปเดตจาก Google Sheet • ${stamp}`;
     renderItems();
   } catch (err) {
-    status.textContent = 'โหลดไม่สำเร็จ: ' + err.message + ' (ตรวจสอบว่าตั้ง "เผยแพร่บนเว็บ" และมีคอลัมน์ service/size/price)';
+    if (status) status.textContent = 'โหลดไม่สำเร็จ: ' + err.message;
+    const mini = $('ratesStatus');
+    if (mini) mini.textContent = 'ใช้ราคาสำรอง (โหลดชีตไม่สำเร็จ)';
+    if (!silent) console.warn('loadRatesFromSheet:', err);
   }
 }
 
@@ -702,4 +738,12 @@ document.addEventListener('DOMContentLoaded', () => {
   items.push({ id: nextItemId++, service: '', size: '', qty: 1 });
   renderItems();
   updateHistoryCount();
+
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 30 วินาที
+  loadRatesFromSheet(true);
+  setInterval(() => loadRatesFromSheet(true), 30000);
+  // ดึงใหม่เมื่อผู้ใช้สลับกลับมาที่แท็บ
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadRatesFromSheet(true);
+  });
 });
