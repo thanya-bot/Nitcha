@@ -427,6 +427,11 @@
     </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script>
+    // cache-bust ไฟล์ JS เพื่อให้โหลดเวอร์ชันล่าสุดเสมอ
+    const s = document.createElement('script');
+    s.src = 'app.js?v=' + Date.now();
+    document.body.appendChild(s);
+  </script>
 </body>
 </html>
