@@ -734,7 +734,11 @@ function switchTab(name) {
 }
 
 // ===== Init =====
-document.addEventListener('DOMContentLoaded', () => {
+function onReady(fn) {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
+  else fn();
+}
+onReady(() => {
   $('addItemBtn').addEventListener('click', () => {
     items.push({ id: nextItemId++, service: '', size: '', qty: 1 });
     renderItems();
