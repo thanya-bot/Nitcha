@@ -38,13 +38,9 @@ const VAT_RATE = 0.07;
 const STORAGE_KEY = 'nitcha_bookings_v1';
 
 // ===== Google Sheet integration =====
-// pubhtml URL ที่เผยแพร่ — ใช้สำหรับ embed/แสดงในแท็บ
+// ดึงราคาตรงจากชีต Published CSV (ไม่ต้องใช้ Apps Script)
 const SHEET_PUBHTML_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pubhtml';
-// CSV ของชีตแรก (สำหรับโหลดราคา)  — เปลี่ยน gid ถ้าราคาอยู่ชีตอื่น
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pub?output=csv';
-// URL ของ Google Apps Script Web App (Deploy as Web App) สำหรับ "เขียน" การจองกลับเข้าชีต
-// ถ้าเว้นว่าง ระบบจะข้ามการส่ง (บันทึก local อย่างเดียว)
-const APPS_SCRIPT_URL = '';
 
 // ===== State =====
 let items = [];
@@ -259,37 +255,8 @@ function validateAndSubmit() {
   };
 
   addBooking(booking);
-  syncBookingToSheet(booking);
   currentBooking = booking;
   showResult(booking);
-}
-
-// ===== Sync booking → Google Sheet (via Apps Script Web App) =====
-function syncBookingToSheet(b) {
-  if (!APPS_SCRIPT_URL) return;
-  const payload = {
-    bookingNo: b.bookingNo,
-    createdAt: b.createdAt,
-    name: b.customer.name,
-    phone: b.customer.phone,
-    address: b.customer.address,
-    note: b.customer.note,
-    date: b.schedule.date,
-    time: b.schedule.time,
-    items: b.items.map(it => `${(SERVICES[it.service]?.label || it.service)} ${SIZES.find(s=>s.value===it.size)?.label||''} ×${it.qty}`).join(' | '),
-    distance: b.distance.label,
-    subtotal: b.totals.subtotal,
-    travel: b.totals.travel,
-    vat: b.totals.vat,
-    total: b.totals.total,
-  };
-  // ใช้ no-cors เพื่อหลีกเลี่ยง CORS preflight ของ Apps Script
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload),
-  }).catch(err => console.warn('Sync to sheet failed:', err));
 }
 
 // ===== Load rates from Google Sheet =====
