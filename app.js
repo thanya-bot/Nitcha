@@ -9,13 +9,14 @@ const COMPANY = {
 };
 
 // ===== Service rate table (บาท) =====
-const SERVICES = {
+// ค่าเริ่มต้น (fallback) — จะถูกแทนที่ด้วยข้อมูลจาก Google Sheet เมื่อโหลดสำเร็จ
+let SERVICES = {
   clean:   { label: 'ล้างแอร์',    rates: { '9000': 500,  '12000': 600,  '18000': 800,  '24000': 1000, '36000': 1500, '48000': 2000 } },
   repair:  { label: 'ซ่อมแอร์',    rates: { '9000': 800,  '12000': 1000, '18000': 1300, '24000': 1600, '36000': 2200, '48000': 2800 } },
   install: { label: 'ติดตั้งแอร์', rates: { '9000': 2500, '12000': 3000, '18000': 4000, '24000': 5500, '36000': 7500, '48000': 9500 } },
 };
 
-const SIZES = [
+let SIZES = [
   { value: '9000',  label: '9,000 BTU' },
   { value: '12000', label: '12,000 BTU' },
   { value: '18000', label: '18,000 BTU' },
@@ -202,7 +203,7 @@ function updateSummary() {
   } else {
     list.innerHTML = items.map((it, idx) => {
       const price = getRate(it.service, it.size) * (it.qty || 1);
-      const svcLabel = it.service ? SERVICES[it.service].label : '—';
+      const svcLabel = it.service ? (SERVICES[it.service]?.label || it.service) : '—';
       const sizeLabel = it.size ? SIZES.find(s => s.value === it.size)?.label : '—';
       return `
         <div class="flex justify-between gap-2">
@@ -275,7 +276,7 @@ function syncBookingToSheet(b) {
     note: b.customer.note,
     date: b.schedule.date,
     time: b.schedule.time,
-    items: b.items.map(it => `${SERVICES[it.service].label} ${SIZES.find(s=>s.value===it.size)?.label||''} ×${it.qty}`).join(' | '),
+    items: b.items.map(it => `${(SERVICES[it.service]?.label || it.service)} ${SIZES.find(s=>s.value===it.size)?.label||''} ×${it.qty}`).join(' | '),
     distance: b.distance.label,
     subtotal: b.totals.subtotal,
     travel: b.totals.travel,
@@ -316,25 +317,24 @@ function parseCsv(text) {
   return rows.filter(r => r.some(v => String(v).trim() !== ''));
 }
 
-// แปลงชื่อบริการในชีต → key ใน SERVICES
-function normalizeServiceKey(s) {
-  const v = String(s || '').trim().toLowerCase();
-  if (!v) return null;
-  if (/(wash|clean|ล้าง)/.test(v)) return 'clean';
-  if (/(repair|fix|ซ่อม)/.test(v)) return 'repair';
-  if (/(install|ติดตั้ง)/.test(v)) return 'install';
-  return null;
+// คีย์มาตรฐานสำหรับชื่อบริการ (ใช้เก็บใน items/booking — ทนต่อภาษา/อักษรพิเศษ)
+function makeServiceKey(name) {
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/[^\w฀-๿]/g, '');
 }
 
-// ดึงเฉพาะตัวเลขจาก header (เช่น "9,000 BTU" → "9000", "12000" → "12000")
+// ดึงตัวเลข BTU จาก header เช่น "9,000 BTU" / "12000" / "9k" → "9000" ; "9" → "9000"
 function normalizeSizeKey(s) {
   const digits = String(s || '').replace(/[^\d]/g, '');
   if (!digits) return null;
-  // ถ้าน้อยกว่า 4 หลัก เช่น "9" "12" "18" ให้คูณ 1000
   let n = Number(digits);
-  if (n > 0 && n < 100) n = n * 1000;
-  const key = String(n);
-  return SIZES.some(s => s.value === key) ? key : null;
+  if (n > 0 && n < 100) n = n * 1000; // "9" → 9000
+  return String(n);
+}
+
+function formatBtuLabel(key) {
+  const n = Number(key);
+  if (!n || Number.isNaN(n)) return key;
+  return n.toLocaleString('en-US') + ' BTU';
 }
 
 async function loadRatesFromSheet(silent) {
@@ -348,32 +348,60 @@ async function loadRatesFromSheet(silent) {
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
 
-    // ตาราง pivot: แถวแรก = ขนาด BTU (col 0 อาจเป็น label/ว่าง), แต่ละแถวถัดมา = บริการ + ราคา
+    // แถวแรก = ขนาด BTU (col 0 มัก = label/ว่าง), แถวถัดมา = ชื่อบริการ + ราคาแต่ละ BTU
     const header = rows[0];
     const sizeCols = []; // {col, sizeKey}
     for (let c = 1; c < header.length; c++) {
       const sz = normalizeSizeKey(header[c]);
       if (sz) sizeCols.push({ col: c, sizeKey: sz });
     }
-    if (sizeCols.length === 0) throw new Error('ไม่พบคอลัมน์ขนาด BTU ในแถวบนสุด');
+    if (sizeCols.length === 0) throw new Error('ไม่พบขนาด BTU ในแถวบนสุด');
 
-    let count = 0;
+    // สร้าง SIZES ใหม่ตามลำดับในชีต (ไม่ซ้ำ)
+    const newSizes = [];
+    const seenSize = new Set();
+    for (const { sizeKey } of sizeCols) {
+      if (!seenSize.has(sizeKey)) {
+        seenSize.add(sizeKey);
+        newSizes.push({ value: sizeKey, label: formatBtuLabel(sizeKey) });
+      }
+    }
+
+    // สร้าง SERVICES ใหม่จากแถวล่าง
+    const newServices = {};
+    let cellCount = 0;
     for (let r = 1; r < rows.length; r++) {
-      const svcKey = normalizeServiceKey(rows[r][0]);
-      if (!svcKey) continue;
+      const rawName = (rows[r][0] || '').trim();
+      if (!rawName) continue;
+      const key = makeServiceKey(rawName);
+      if (!key) continue;
+      if (!newServices[key]) newServices[key] = { label: rawName, rates: {} };
       for (const { col, sizeKey } of sizeCols) {
         const raw = rows[r][col];
         if (raw == null || String(raw).trim() === '') continue;
         const price = Number(String(raw).replace(/[^\d.-]/g, ''));
         if (!Number.isNaN(price) && price >= 0) {
-          SERVICES[svcKey].rates[sizeKey] = price;
-          count++;
+          newServices[key].rates[sizeKey] = price;
+          cellCount++;
         }
       }
     }
-    if (count === 0) throw new Error('ไม่พบราคาที่ตรงกับรูปแบบ (บริการ × BTU)');
+    if (cellCount === 0 || Object.keys(newServices).length === 0) {
+      throw new Error('ไม่พบข้อมูลราคาในชีต');
+    }
+
+    SIZES = newSizes;
+    SERVICES = newServices;
+
+    // ลบรายการ items ที่อ้างถึง service/size ที่ไม่มีอีกแล้ว
+    items = items.map(it => ({
+      ...it,
+      service: SERVICES[it.service] ? it.service : '',
+      size: SIZES.some(s => s.value === it.size) ? it.size : '',
+    }));
+
     const stamp = new Date().toLocaleTimeString('th-TH');
-    if (status) status.textContent = `อัปเดตราคาล่าสุด ${count} ช่อง • ${stamp}`;
+    if (status) status.textContent = `อัปเดตราคาล่าสุด • ${Object.keys(SERVICES).length} บริการ × ${SIZES.length} ขนาด • ${stamp}`;
     const mini = $('ratesStatus');
     if (mini) mini.textContent = `ราคาอัปเดตจาก Google Sheet • ${stamp}`;
     renderItems();
@@ -404,7 +432,7 @@ function showResult(b) {
     return `
       <div class="flex justify-between border-b border-subtle pb-2 last:border-0">
         <div>
-          <div>${idx + 1}. ${SERVICES[it.service].label}</div>
+          <div>${idx + 1}. ${(SERVICES[it.service]?.label || it.service)}</div>
           <div class="text-xs text-muted">${sizeLabel} × ${it.qty}</div>
         </div>
         <div class="font-medium">${fmt(price)}</div>
@@ -452,7 +480,7 @@ function buildPdfHtml(b) {
       <tr>
         <td>${idx + 1}</td>
         <td>
-          <div style="font-weight:500;">${SERVICES[it.service].label}</div>
+          <div style="font-weight:500;">${(SERVICES[it.service]?.label || it.service)}</div>
           <div style="color:#888780;font-size:11px;">${sizeLabel}</div>
         </td>
         <td class="text-right">${fmt(it.rate)}</td>
@@ -602,7 +630,8 @@ function renderHistory() {
           const svcSet = [...new Set(b.items.map(it => it.service))];
           const badges = svcSet.map(s => {
             const cls = s === 'clean' ? 'badge-clean' : s === 'repair' ? 'badge-repair' : 'badge-install';
-            return `<span class="badge ${cls}">${SERVICES[s].label}</span>`;
+            const label = SERVICES[s]?.label || s;
+            return `<span class="badge ${cls}">${esc(label)}</span>`;
           }).join(' ');
           return `
             <tr class="border-b border-subtle hover:bg-canvas">
@@ -666,7 +695,7 @@ function openDetail(no) {
           return `
             <div class="flex justify-between border-b border-subtle py-2">
               <div>
-                <div>${idx + 1}. ${SERVICES[it.service].label}</div>
+                <div>${idx + 1}. ${(SERVICES[it.service]?.label || it.service)}</div>
                 <div class="text-xs text-muted">${sizeLabel} × ${it.qty}</div>
               </div>
               <div class="font-medium">${fmt(it.rate * it.qty)}</div>
