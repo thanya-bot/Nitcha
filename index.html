@@ -152,6 +152,14 @@
           ประวัติการจอง <span id="historyCount" class="ml-1 text-xs"></span>
         </span>
       </button>
+      <button class="tab-btn" data-tab="sheet">
+        <span class="inline-flex items-center gap-1.5">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-4 h-4">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3h16.5v18H3.75zM3.75 9h16.5M3.75 15h16.5M9 3v18M15 3v18" />
+          </svg>
+          ข้อมูลจาก Google Sheet
+        </span>
+      </button>
     </div>
   </header>
 
@@ -364,6 +372,26 @@
           </div>
         </div>
         <div id="historyTableWrap" class="overflow-x-auto"></div>
+      </div>
+    </div>
+
+    <div id="tabSheet" class="tab-panel max-w-6xl mx-auto px-6 py-10 hidden">
+      <div class="card p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+          <div>
+            <h2 class="text-[18px] font-semibold">ข้อมูลจาก Google Sheet</h2>
+            <p class="text-sm text-muted mt-1">เชื่อมต่อกับชีตที่เผยแพร่บนเว็บ (Publish to web)</p>
+          </div>
+          <div class="flex gap-2">
+            <button id="reloadSheetBtn" type="button" class="btn-secondary">รีเฟรช</button>
+            <button id="loadRatesBtn" type="button" class="btn-secondary">โหลดราคาจากชีต</button>
+            <a id="openSheetLink" href="#" target="_blank" rel="noopener" class="btn-secondary">เปิดในแท็บใหม่</a>
+          </div>
+        </div>
+        <div id="sheetStatus" class="text-xs text-muted mb-3"></div>
+        <div class="border border-subtle rounded-lg overflow-hidden bg-white" style="height: 70vh;">
+          <iframe id="sheetFrame" src="" class="w-full h-full" style="border:0;"></iframe>
+        </div>
       </div>
     </div>
 

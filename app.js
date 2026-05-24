@@ -36,6 +36,15 @@ const DISTANCE_LABELS = {
 const VAT_RATE = 0.07;
 const STORAGE_KEY = 'nitcha_bookings_v1';
 
+// ===== Google Sheet integration =====
+// pubhtml URL ที่เผยแพร่ — ใช้สำหรับ embed/แสดงในแท็บ
+const SHEET_PUBHTML_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pubhtml';
+// CSV ของชีตแรก (สำหรับโหลดราคา)  — เปลี่ยน gid ถ้าราคาอยู่ชีตอื่น
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pub?output=csv';
+// URL ของ Google Apps Script Web App (Deploy as Web App) สำหรับ "เขียน" การจองกลับเข้าชีต
+// ถ้าเว้นว่าง ระบบจะข้ามการส่ง (บันทึก local อย่างเดียว)
+const APPS_SCRIPT_URL = '';
+
 // ===== State =====
 let items = [];
 let nextItemId = 1;
@@ -249,8 +258,95 @@ function validateAndSubmit() {
   };
 
   addBooking(booking);
+  syncBookingToSheet(booking);
   currentBooking = booking;
   showResult(booking);
+}
+
+// ===== Sync booking → Google Sheet (via Apps Script Web App) =====
+function syncBookingToSheet(b) {
+  if (!APPS_SCRIPT_URL) return;
+  const payload = {
+    bookingNo: b.bookingNo,
+    createdAt: b.createdAt,
+    name: b.customer.name,
+    phone: b.customer.phone,
+    address: b.customer.address,
+    note: b.customer.note,
+    date: b.schedule.date,
+    time: b.schedule.time,
+    items: b.items.map(it => `${SERVICES[it.service].label} ${SIZES.find(s=>s.value===it.size)?.label||''} ×${it.qty}`).join(' | '),
+    distance: b.distance.label,
+    subtotal: b.totals.subtotal,
+    travel: b.totals.travel,
+    vat: b.totals.vat,
+    total: b.totals.total,
+  };
+  // ใช้ no-cors เพื่อหลีกเลี่ยง CORS preflight ของ Apps Script
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  }).catch(err => console.warn('Sync to sheet failed:', err));
+}
+
+// ===== Load rates from Google Sheet =====
+// คาดว่าชีตมีคอลัมน์: service, size, price
+// service = clean | repair | install ; size = 9000/12000/18000/24000/36000/48000
+function parseCsv(text) {
+  const rows = [];
+  let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { cell += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else cell += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i+1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += c;
+    }
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(v => String(v).trim() !== ''));
+}
+
+async function loadRatesFromSheet() {
+  const status = $('sheetStatus');
+  status.textContent = 'กำลังโหลดราคาจากชีต...';
+  try {
+    const res = await fetch(SHEET_CSV_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const rows = parseCsv(text);
+    if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
+    const header = rows[0].map(h => h.trim().toLowerCase());
+    const iSvc = header.indexOf('service');
+    const iSize = header.indexOf('size');
+    const iPrice = header.indexOf('price');
+    if (iSvc < 0 || iSize < 0 || iPrice < 0) {
+      throw new Error('ต้องมีคอลัมน์ service, size, price ในแถวแรก');
+    }
+    let count = 0;
+    for (let r = 1; r < rows.length; r++) {
+      const svc = (rows[r][iSvc] || '').trim();
+      const size = (rows[r][iSize] || '').trim();
+      const price = Number(String(rows[r][iPrice]).replace(/[^\d.-]/g, ''));
+      if (SERVICES[svc] && size && !Number.isNaN(price)) {
+        SERVICES[svc].rates[size] = price;
+        count++;
+      }
+    }
+    status.textContent = `โหลดสำเร็จ — อัปเดต ${count} รายการราคา (${new Date().toLocaleTimeString('th-TH')})`;
+    renderItems();
+  } catch (err) {
+    status.textContent = 'โหลดไม่สำเร็จ: ' + err.message + ' (ตรวจสอบว่าตั้ง "เผยแพร่บนเว็บ" และมีคอลัมน์ service/size/price)';
+  }
 }
 
 function showResult(b) {
@@ -564,7 +660,12 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $('tabCreate').classList.toggle('hidden', name !== 'create');
   $('tabHistory').classList.toggle('hidden', name !== 'history');
+  $('tabSheet').classList.toggle('hidden', name !== 'sheet');
   if (name === 'history') renderHistory();
+  if (name === 'sheet') {
+    const frame = $('sheetFrame');
+    if (!frame.src) frame.src = SHEET_PUBHTML_URL + (SHEET_PUBHTML_URL.includes('?') ? '&' : '?') + 'widget=true&headers=false';
+  }
 }
 
 // ===== Init =====
@@ -588,6 +689,13 @@ document.addEventListener('DOMContentLoaded', () => {
       updateHistoryCount();
     }
   });
+  $('openSheetLink').href = SHEET_PUBHTML_URL;
+  $('reloadSheetBtn').addEventListener('click', () => {
+    const f = $('sheetFrame');
+    f.src = SHEET_PUBHTML_URL + (SHEET_PUBHTML_URL.includes('?') ? '&' : '?') + 'widget=true&headers=false&t=' + Date.now();
+  });
+  $('loadRatesBtn').addEventListener('click', loadRatesFromSheet);
+
   $('closeDetail').addEventListener('click', closeDetail);
   $('detailModal').addEventListener('click', e => { if (e.target.id === 'detailModal') closeDetail(); });
 
