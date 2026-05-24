@@ -332,13 +332,41 @@ async function fetchCsvWithFallback(url) {
   throw lastErr || new Error('ทุก fallback ล้มเหลว');
 }
 
+let _lastSheetHash = '';
+let _ratesLoading = false;
+
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
 async function loadRatesFromSheet(silent) {
+  if (_ratesLoading) return;
+  _ratesLoading = true;
   const status = $('sheetStatus');
+  const mini = $('ratesStatus');
+  if (mini && !silent) {
+    mini.textContent = '⟳ กำลังโหลดราคาจาก Google Sheet...';
+    mini.style.color = '#888780';
+  }
   if (status && !silent) status.textContent = 'กำลังโหลดราคาจากชีต...';
   try {
     const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
     const { text, via } = await fetchCsvWithFallback(url);
-    console.log('[rates] fetched via', via, '— bytes:', text.length);
+    const newHash = hashStr(text);
+    if (newHash === _lastSheetHash) {
+      // ไม่มีการเปลี่ยนแปลง — แค่อัปเดต timestamp
+      const stamp = new Date().toLocaleTimeString('th-TH');
+      if (mini) {
+        mini.textContent = `✓ ราคาตรงกับ Google Sheet • ${stamp}`;
+        mini.style.color = '#166534';
+      }
+      _ratesLoading = false;
+      return;
+    }
+    _lastSheetHash = newHash;
+    console.log('[rates] sheet changed — via', via, 'bytes:', text.length);
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
 
@@ -405,11 +433,15 @@ async function loadRatesFromSheet(silent) {
   } catch (err) {
     console.error('loadRatesFromSheet failed:', err);
     if (status) status.textContent = 'โหลดไม่สำเร็จ: ' + err.message;
-    const mini = $('ratesStatus');
     if (mini) {
-      mini.textContent = '⚠ โหลดราคาจากชีตไม่สำเร็จ: ' + err.message + ' (ใช้ราคาสำรอง)';
+      mini.textContent = '⚠ โหลดราคาไม่สำเร็จ: ' + err.message + ' — กำลังลองใหม่...';
       mini.style.color = '#B91C1C';
     }
+    // retry เร็วขึ้นเมื่อล้มเหลว
+    setTimeout(() => { _ratesLoading = false; loadRatesFromSheet(true); }, 3000);
+    return;
+  } finally {
+    _ratesLoading = false;
   }
 }
 
@@ -776,9 +808,9 @@ onReady(() => {
   const reloadBtn = $('reloadRatesBtn');
   if (reloadBtn) reloadBtn.addEventListener('click', () => loadRatesFromSheet(false));
 
-  // ดึงราคาจากชีตทันทีที่เข้าหน้า (โชว์ error ถ้ามี) + รีเฟรชอัตโนมัติทุก 10 วินาที (เรียลไทม์)
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 5 วินาที (เรียลไทม์)
   loadRatesFromSheet(false);
-  setInterval(() => loadRatesFromSheet(true), 10000);
+  setInterval(() => loadRatesFromSheet(true), 5000);
   // ดึงใหม่ทันทีเมื่อผู้ใช้สลับกลับมาที่แท็บ / โฟกัสหน้าต่าง
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) loadRatesFromSheet(true);
