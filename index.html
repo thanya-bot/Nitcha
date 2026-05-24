@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ระบบคำนวณค่าบริการแอร์</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'IBM Plex Sans Thai', 'system-ui', '-apple-system', 'sans-serif'],
+          },
+          colors: {
+            canvas: 'rgb(249, 249, 247)',
+            ink: '#1A1A1A',
+            muted: '#888780',
+            accent: '#F1EFE8',
+            subtle: 'rgba(0, 0, 0, 0.12)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: 'Inter', 'IBM Plex Sans Thai', system-ui, -apple-system, sans-serif; }
+    .field {
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: #FFFFFF;
+      width: 100%;
+      font-size: 14px;
+      color: #1A1A1A;
+      outline: none;
+      transition: box-shadow .15s ease, border-color .15s ease;
+    }
+    .field::placeholder { color: #888780; }
+    .field:focus {
+      border-color: #1A1A1A;
+      box-shadow: 0 0 0 2px #1A1A1A;
+    }
+    .btn-primary {
+      background: #1A1A1A;
+      color: #FFFFFF;
+      border-radius: 8px;
+      padding: 10px 32px;
+      font-weight: 500;
+      font-size: 14px;
+      transition: opacity .15s ease;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:focus { outline: 2px solid #1A1A1A; outline-offset: 2px; }
+    .btn-secondary {
+      background: #FFFFFF;
+      color: #1A1A1A;
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-weight: 500;
+      font-size: 14px;
+      transition: background .15s ease;
+    }
+    .btn-secondary:hover { background: #F1EFE8; }
+    .card {
+      background: #FFFFFF;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .card-dashed {
+      background: transparent;
+      border: 1px dashed rgba(0, 0, 0, 0.15);
+      border-radius: 12px;
+    }
+    .label {
+      font-size: 14px;
+      font-weight: 500;
+      color: #1A1A1A;
+      display: block;
+      margin-bottom: 6px;
+    }
+    select.field {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='%23888780'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      background-size: 16px;
+      padding-right: 36px;
+    }
+    .hidden-print { }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white !important; }
+    }
+  </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col bg-canvas text-ink">
+  <!-- Header -->
+  <header class="border-b border-subtle bg-white">
+    <div class="max-w-6xl mx-auto px-6 py-5 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-ink text-white flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5h18M3 12h18M3 16.5h18" />
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-[23px] font-semibold leading-tight">ระบบคำนวณค่าบริการแอร์</h1>
+        <p class="text-sm text-muted">สำหรับพนักงานรับบริการลูกค้า — ล้าง • ซ่อม • ติดตั้ง</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1">
+    <div class="max-w-6xl mx-auto px-6 py-10">
+      <!-- Form view -->
+      <div id="formView" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left: Form -->
+        <div class="lg:col-span-2 space-y-8">
+          <!-- Section: Services -->
+          <section class="card p-6">
+            <div class="flex items-center justify-between mb-5">
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                </svg>
+                <h2 class="text-[18px] font-semibold">รายการบริการ</h2>
+              </div>
+              <button type="button" id="addItemBtn" class="btn-secondary inline-flex items-center gap-1.5">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                เพิ่มรายการ
+              </button>
+            </div>
+            <div id="itemsContainer" class="space-y-4"></div>
+          </section>
+
+          <!-- Section: Distance -->
+          <section class="card p-6">
+            <div class="flex items-center gap-2 mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+              </svg>
+              <h2 class="text-[18px] font-semibold">ระยะทางจากศูนย์บริการ</h2>
+            </div>
+            <label class="label" for="distance">เลือกระยะทาง</label>
+            <select id="distance" class="field">
+              <option value="0">ในรัศมี 5 กม. (ฟรีค่าเดินทาง)</option>
+              <option value="100">6 - 10 กม. (+100 บาท)</option>
+              <option value="200">11 - 20 กม. (+200 บาท)</option>
+              <option value="350">21 - 30 กม. (+350 บาท)</option>
+              <option value="500">31 - 50 กม. (+500 บาท)</option>
+              <option value="800">มากกว่า 50 กม. (+800 บาท)</option>
+            </select>
+          </section>
+
+          <!-- Section: Customer -->
+          <section class="card p-6">
+            <div class="flex items-center gap-2 mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+              </svg>
+              <h2 class="text-[18px] font-semibold">ข้อมูลลูกค้า</h2>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="label" for="custName">ชื่อ-นามสกุล</label>
+                <input id="custName" type="text" class="field" placeholder="เช่น คุณสมชาย ใจดี" />
+              </div>
+              <div>
+                <label class="label" for="custPhone">เบอร์โทรศัพท์</label>
+                <input id="custPhone" type="tel" class="field" placeholder="08X-XXX-XXXX" />
+              </div>
+              <div class="md:col-span-2">
+                <label class="label" for="custAddress">ที่อยู่</label>
+                <textarea id="custAddress" rows="2" class="field" placeholder="บ้านเลขที่ ถนน ตำบล อำเภอ จังหวัด"></textarea>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section: Schedule -->
+          <section class="card p-6">
+            <div class="flex items-center gap-2 mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+              </svg>
+              <h2 class="text-[18px] font-semibold">วัน-เวลาที่ให้บริการ</h2>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="label" for="bookDate">วันที่</label>
+                <input id="bookDate" type="date" class="field" />
+              </div>
+              <div>
+                <label class="label" for="bookTime">เวลา</label>
+                <input id="bookTime" type="time" class="field" />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Right: Summary sidebar -->
+        <aside class="lg:col-span-1">
+          <div class="card p-6 lg:sticky lg:top-6">
+            <div class="flex items-center gap-2 mb-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-5 h-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h2 class="text-[18px] font-semibold">สรุปค่าบริการ</h2>
+            </div>
+
+            <div id="summaryList" class="space-y-2 text-sm mb-4"></div>
+
+            <div class="border-t border-subtle pt-4 space-y-2 text-sm">
+              <div class="flex justify-between text-muted">
+                <span>ค่าบริการรวม</span>
+                <span id="subTotalLabel">฿0</span>
+              </div>
+              <div class="flex justify-between text-muted">
+                <span>ค่าเดินทาง</span>
+                <span id="travelLabel">฿0</span>
+              </div>
+              <div class="flex justify-between text-[18px] font-semibold pt-2 border-t border-subtle">
+                <span>ยอดรวมสุทธิ</span>
+                <span id="totalLabel">฿0</span>
+              </div>
+            </div>
+
+            <button id="submitBtn" type="button" class="btn-primary w-full mt-6">
+              ตกลง / ยืนยันการจอง
+            </button>
+            <p class="text-xs text-muted mt-3 text-center">กดยืนยันเพื่อสร้างหมายเลขการจอง</p>
+          </div>
+        </aside>
+      </div>
+
+      <!-- Result view -->
+      <div id="resultView" class="hidden">
+        <div class="max-w-2xl mx-auto card p-8">
+          <div class="flex flex-col items-center text-center mb-6">
+            <div class="w-14 h-14 rounded-full bg-ink text-white flex items-center justify-center mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-7 h-7">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </div>
+            <h2 class="text-[23px] font-semibold">การจองสำเร็จ</h2>
+            <p class="text-sm text-muted mt-1">ระบบได้บันทึกการจองเรียบร้อยแล้ว</p>
+          </div>
+
+          <div class="card-dashed p-5 mb-6 text-center">
+            <p class="text-sm text-muted mb-1">หมายเลขการจอง</p>
+            <p id="bookingNumber" class="text-2xl font-semibold tracking-wide">—</p>
+          </div>
+
+          <div class="space-y-6 text-sm">
+            <div>
+              <h3 class="text-[14px] font-semibold mb-2 text-muted uppercase tracking-wide">รายละเอียดลูกค้า</h3>
+              <div id="resultCustomer" class="space-y-1"></div>
+            </div>
+            <div>
+              <h3 class="text-[14px] font-semibold mb-2 text-muted uppercase tracking-wide">วันและเวลานัดหมาย</h3>
+              <div id="resultSchedule" class="space-y-1"></div>
+            </div>
+            <div>
+              <h3 class="text-[14px] font-semibold mb-2 text-muted uppercase tracking-wide">รายการบริการ</h3>
+              <div id="resultItems" class="space-y-2"></div>
+            </div>
+            <div class="border-t border-subtle pt-4 space-y-2">
+              <div class="flex justify-between text-muted">
+                <span>ค่าบริการรวม</span>
+                <span id="resultSubtotal">฿0</span>
+              </div>
+              <div class="flex justify-between text-muted">
+                <span>ค่าเดินทาง</span>
+                <span id="resultTravel">฿0</span>
+              </div>
+              <div class="flex justify-between text-[18px] font-semibold pt-2 border-t border-subtle">
+                <span>ยอดรวมสุทธิ</span>
+                <span id="resultTotal">฿0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex gap-3 mt-8 no-print">
+            <button id="printBtn" type="button" class="btn-secondary flex-1">พิมพ์ใบจอง</button>
+            <button id="newBookingBtn" type="button" class="btn-primary flex-1">สร้างการจองใหม่</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="border-t border-subtle bg-white">
+    <div class="max-w-6xl mx-auto px-6 py-4 text-xs text-muted text-center">
+      © 2026 บริการแอร์ครบวงจร — ใบเสนอราคาเป็นการประมาณการเบื้องต้น
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
