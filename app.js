@@ -340,23 +340,29 @@ function formatBtuLabel(key) {
 }
 
 async function fetchCsvWithFallback(url) {
-  // 1) ลองตรง
-  try {
-    const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
-    if (r.ok) {
+  const attempts = [
+    { name: 'direct', url: url },
+    { name: 'corsproxy.io', url: 'https://corsproxy.io/?' + encodeURIComponent(url) },
+    { name: 'allorigins', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url) },
+    { name: 'codetabs', url: 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url) },
+  ];
+  let lastErr = null;
+  for (const a of attempts) {
+    try {
+      const r = await fetch(a.url, { redirect: 'follow' });
+      if (!r.ok) { lastErr = new Error(a.name + ' HTTP ' + r.status); continue; }
       const text = await r.text();
-      if (text && text.length > 0) return { text, via: 'direct' };
+      if (text && text.length > 10 && text.includes(',')) {
+        console.log('[rates] OK via', a.name, '— bytes:', text.length);
+        return { text, via: a.name };
+      }
+      lastErr = new Error(a.name + ' returned empty/invalid');
+    } catch (e) {
+      lastErr = e;
+      console.warn('[rates] failed via', a.name, ':', e.message);
     }
-    console.warn('direct fetch returned', r.status);
-  } catch (e) {
-    console.warn('direct fetch failed:', e.message);
   }
-  // 2) Fallback ผ่าน CORS proxy สาธารณะ
-  const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
-  const r2 = await fetch(proxied, { cache: 'no-store' });
-  if (!r2.ok) throw new Error('Proxy HTTP ' + r2.status);
-  const text = await r2.text();
-  return { text, via: 'corsproxy.io' };
+  throw lastErr || new Error('ทุก fallback ล้มเหลว');
 }
 
 async function loadRatesFromSheet(silent) {
@@ -799,8 +805,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const reloadBtn = $('reloadRatesBtn');
   if (reloadBtn) reloadBtn.addEventListener('click', () => loadRatesFromSheet(false));
 
-  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 10 วินาที (เรียลไทม์)
-  loadRatesFromSheet(true);
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า (โชว์ error ถ้ามี) + รีเฟรชอัตโนมัติทุก 10 วินาที (เรียลไทม์)
+  loadRatesFromSheet(false);
   setInterval(() => loadRatesFromSheet(true), 10000);
   // ดึงใหม่ทันทีเมื่อผู้ใช้สลับกลับมาที่แท็บ / โฟกัสหน้าต่าง
   document.addEventListener('visibilitychange', () => {
