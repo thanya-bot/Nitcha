@@ -9,13 +9,14 @@ const COMPANY = {
 };
 
 // ===== Service rate table (บาท) =====
-const SERVICES = {
+// ค่าเริ่มต้น (fallback) — จะถูกแทนที่ด้วยข้อมูลจาก Google Sheet เมื่อโหลดสำเร็จ
+let SERVICES = {
   clean:   { label: 'ล้างแอร์',    rates: { '9000': 500,  '12000': 600,  '18000': 800,  '24000': 1000, '36000': 1500, '48000': 2000 } },
   repair:  { label: 'ซ่อมแอร์',    rates: { '9000': 800,  '12000': 1000, '18000': 1300, '24000': 1600, '36000': 2200, '48000': 2800 } },
   install: { label: 'ติดตั้งแอร์', rates: { '9000': 2500, '12000': 3000, '18000': 4000, '24000': 5500, '36000': 7500, '48000': 9500 } },
 };
 
-const SIZES = [
+let SIZES = [
   { value: '9000',  label: '9,000 BTU' },
   { value: '12000', label: '12,000 BTU' },
   { value: '18000', label: '18,000 BTU' },
@@ -35,6 +36,11 @@ const DISTANCE_LABELS = {
 
 const VAT_RATE = 0.07;
 const STORAGE_KEY = 'nitcha_bookings_v1';
+
+// ===== Google Sheet integration =====
+// ดึงราคาตรงจากชีต Published CSV (ไม่ต้องใช้ Apps Script)
+const SHEET_PUBHTML_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pubhtml';
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQbLTBxowSWLfHSAae_ih_K15AFwHsJ8D1QToFHYIVmbPkNwczDjGuNukLO9tAUaRDE-EHZ5sadfpcI/pub?output=csv';
 
 // ===== State =====
 let items = [];
@@ -193,7 +199,7 @@ function updateSummary() {
   } else {
     list.innerHTML = items.map((it, idx) => {
       const price = getRate(it.service, it.size) * (it.qty || 1);
-      const svcLabel = it.service ? SERVICES[it.service].label : '—';
+      const svcLabel = it.service ? (SERVICES[it.service]?.label || it.service) : '—';
       const sizeLabel = it.size ? SIZES.find(s => s.value === it.size)?.label : '—';
       return `
         <div class="flex justify-between gap-2">
@@ -253,6 +259,160 @@ function validateAndSubmit() {
   showResult(booking);
 }
 
+// ===== Load rates from Google Sheet =====
+// คาดว่าชีตมีคอลัมน์: service, size, price
+// service = clean | repair | install ; size = 9000/12000/18000/24000/36000/48000
+function parseCsv(text) {
+  // ลบ BOM ที่ Google CSV มักใส่มา
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { cell += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else cell += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i+1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += c;
+    }
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(v => String(v).trim() !== ''));
+}
+
+// คีย์มาตรฐานสำหรับชื่อบริการ (ใช้เก็บใน items/booking — ทนต่อภาษา/อักษรพิเศษ)
+function makeServiceKey(name) {
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/[^\w฀-๿]/g, '');
+}
+
+// ดึงตัวเลข BTU จาก header เช่น "9,000 BTU" / "12000" / "9k" → "9000" ; "9" → "9000"
+function normalizeSizeKey(s) {
+  const digits = String(s || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  let n = Number(digits);
+  if (n > 0 && n < 100) n = n * 1000; // "9" → 9000
+  return String(n);
+}
+
+function formatBtuLabel(key) {
+  const n = Number(key);
+  if (!n || Number.isNaN(n)) return key;
+  return n.toLocaleString('en-US') + ' BTU';
+}
+
+async function fetchCsvWithFallback(url) {
+  const attempts = [
+    { name: 'direct', url: url },
+    { name: 'corsproxy.io', url: 'https://corsproxy.io/?' + encodeURIComponent(url) },
+    { name: 'allorigins', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url) },
+    { name: 'codetabs', url: 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(url) },
+  ];
+  let lastErr = null;
+  for (const a of attempts) {
+    try {
+      const r = await fetch(a.url, { redirect: 'follow' });
+      if (!r.ok) { lastErr = new Error(a.name + ' HTTP ' + r.status); continue; }
+      const text = await r.text();
+      if (text && text.length > 10 && text.includes(',')) {
+        console.log('[rates] OK via', a.name, '— bytes:', text.length);
+        return { text, via: a.name };
+      }
+      lastErr = new Error(a.name + ' returned empty/invalid');
+    } catch (e) {
+      lastErr = e;
+      console.warn('[rates] failed via', a.name, ':', e.message);
+    }
+  }
+  throw lastErr || new Error('ทุก fallback ล้มเหลว');
+}
+
+async function loadRatesFromSheet(silent) {
+  const status = $('sheetStatus');
+  if (status && !silent) status.textContent = 'กำลังโหลดราคาจากชีต...';
+  try {
+    const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
+    const { text, via } = await fetchCsvWithFallback(url);
+    console.log('[rates] fetched via', via, '— bytes:', text.length);
+    const rows = parseCsv(text);
+    if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
+
+    // แถวแรก = ขนาด BTU (col 0 มัก = label/ว่าง), แถวถัดมา = ชื่อบริการ + ราคาแต่ละ BTU
+    const header = rows[0];
+    const sizeCols = []; // {col, sizeKey}
+    for (let c = 1; c < header.length; c++) {
+      const sz = normalizeSizeKey(header[c]);
+      if (sz) sizeCols.push({ col: c, sizeKey: sz });
+    }
+    if (sizeCols.length === 0) throw new Error('ไม่พบขนาด BTU ในแถวบนสุด');
+
+    // สร้าง SIZES ใหม่ตามลำดับในชีต (ไม่ซ้ำ)
+    const newSizes = [];
+    const seenSize = new Set();
+    for (const { sizeKey } of sizeCols) {
+      if (!seenSize.has(sizeKey)) {
+        seenSize.add(sizeKey);
+        newSizes.push({ value: sizeKey, label: formatBtuLabel(sizeKey) });
+      }
+    }
+
+    // สร้าง SERVICES ใหม่จากแถวล่าง
+    const newServices = {};
+    let cellCount = 0;
+    for (let r = 1; r < rows.length; r++) {
+      const rawName = (rows[r][0] || '').trim();
+      if (!rawName) continue;
+      const key = makeServiceKey(rawName);
+      if (!key) continue;
+      if (!newServices[key]) newServices[key] = { label: rawName, rates: {} };
+      for (const { col, sizeKey } of sizeCols) {
+        const raw = rows[r][col];
+        if (raw == null || String(raw).trim() === '') continue;
+        const price = Number(String(raw).replace(/[^\d.-]/g, ''));
+        if (!Number.isNaN(price) && price >= 0) {
+          newServices[key].rates[sizeKey] = price;
+          cellCount++;
+        }
+      }
+    }
+    if (cellCount === 0 || Object.keys(newServices).length === 0) {
+      throw new Error('ไม่พบข้อมูลราคาในชีต');
+    }
+
+    SIZES = newSizes;
+    SERVICES = newServices;
+
+    // ลบรายการ items ที่อ้างถึง service/size ที่ไม่มีอีกแล้ว
+    items = items.map(it => ({
+      ...it,
+      service: SERVICES[it.service] ? it.service : '',
+      size: SIZES.some(s => s.value === it.size) ? it.size : '',
+    }));
+
+    const stamp = new Date().toLocaleTimeString('th-TH');
+    if (status) status.textContent = `อัปเดตราคาล่าสุด • ${Object.keys(SERVICES).length} บริการ × ${SIZES.length} ขนาด • ${stamp}`;
+    const mini = $('ratesStatus');
+    if (mini) {
+      mini.textContent = `✓ ราคาอัปเดตจาก Google Sheet • ${stamp}`;
+      mini.style.color = '#166534';
+    }
+    renderItems();
+  } catch (err) {
+    console.error('loadRatesFromSheet failed:', err);
+    if (status) status.textContent = 'โหลดไม่สำเร็จ: ' + err.message;
+    const mini = $('ratesStatus');
+    if (mini) {
+      mini.textContent = '⚠ โหลดราคาจากชีตไม่สำเร็จ: ' + err.message + ' (ใช้ราคาสำรอง)';
+      mini.style.color = '#B91C1C';
+    }
+  }
+}
+
 function showResult(b) {
   $('bookingNumber').textContent = b.bookingNo;
 
@@ -272,7 +432,7 @@ function showResult(b) {
     return `
       <div class="flex justify-between border-b border-subtle pb-2 last:border-0">
         <div>
-          <div>${idx + 1}. ${SERVICES[it.service].label}</div>
+          <div>${idx + 1}. ${(SERVICES[it.service]?.label || it.service)}</div>
           <div class="text-xs text-muted">${sizeLabel} × ${it.qty}</div>
         </div>
         <div class="font-medium">${fmt(price)}</div>
@@ -320,7 +480,7 @@ function buildPdfHtml(b) {
       <tr>
         <td>${idx + 1}</td>
         <td>
-          <div style="font-weight:500;">${SERVICES[it.service].label}</div>
+          <div style="font-weight:500;">${(SERVICES[it.service]?.label || it.service)}</div>
           <div style="color:#888780;font-size:11px;">${sizeLabel}</div>
         </td>
         <td class="text-right">${fmt(it.rate)}</td>
@@ -470,7 +630,8 @@ function renderHistory() {
           const svcSet = [...new Set(b.items.map(it => it.service))];
           const badges = svcSet.map(s => {
             const cls = s === 'clean' ? 'badge-clean' : s === 'repair' ? 'badge-repair' : 'badge-install';
-            return `<span class="badge ${cls}">${SERVICES[s].label}</span>`;
+            const label = SERVICES[s]?.label || s;
+            return `<span class="badge ${cls}">${esc(label)}</span>`;
           }).join(' ');
           return `
             <tr class="border-b border-subtle hover:bg-canvas">
@@ -534,7 +695,7 @@ function openDetail(no) {
           return `
             <div class="flex justify-between border-b border-subtle py-2">
               <div>
-                <div>${idx + 1}. ${SERVICES[it.service].label}</div>
+                <div>${idx + 1}. ${(SERVICES[it.service]?.label || it.service)}</div>
                 <div class="text-xs text-muted">${sizeLabel} × ${it.qty}</div>
               </div>
               <div class="font-medium">${fmt(it.rate * it.qty)}</div>
@@ -564,7 +725,12 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $('tabCreate').classList.toggle('hidden', name !== 'create');
   $('tabHistory').classList.toggle('hidden', name !== 'history');
+  $('tabSheet').classList.toggle('hidden', name !== 'sheet');
   if (name === 'history') renderHistory();
+  if (name === 'sheet') {
+    const frame = $('sheetFrame');
+    if (!frame.src) frame.src = SHEET_PUBHTML_URL + (SHEET_PUBHTML_URL.includes('?') ? '&' : '?') + 'widget=true&headers=false';
+  }
 }
 
 // ===== Init =====
@@ -588,10 +754,31 @@ document.addEventListener('DOMContentLoaded', () => {
       updateHistoryCount();
     }
   });
+  $('openSheetLink').href = SHEET_PUBHTML_URL;
+  $('reloadSheetBtn').addEventListener('click', () => {
+    const f = $('sheetFrame');
+    f.src = SHEET_PUBHTML_URL + (SHEET_PUBHTML_URL.includes('?') ? '&' : '?') + 'widget=true&headers=false&t=' + Date.now();
+  });
+  $('loadRatesBtn').addEventListener('click', loadRatesFromSheet);
+
   $('closeDetail').addEventListener('click', closeDetail);
   $('detailModal').addEventListener('click', e => { if (e.target.id === 'detailModal') closeDetail(); });
 
   items.push({ id: nextItemId++, service: '', size: '', qty: 1 });
   renderItems();
   updateHistoryCount();
+
+  // ปุ่มรีโหลดบนการ์ดสรุป
+  const reloadBtn = $('reloadRatesBtn');
+  if (reloadBtn) reloadBtn.addEventListener('click', () => loadRatesFromSheet(false));
+
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า (โชว์ error ถ้ามี) + รีเฟรชอัตโนมัติทุก 10 วินาที (เรียลไทม์)
+  loadRatesFromSheet(false);
+  setInterval(() => loadRatesFromSheet(true), 10000);
+  // ดึงใหม่ทันทีเมื่อผู้ใช้สลับกลับมาที่แท็บ / โฟกัสหน้าต่าง
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadRatesFromSheet(true);
+  });
+  window.addEventListener('focus', () => loadRatesFromSheet(true));
+  window.addEventListener('online', () => loadRatesFromSheet(true));
 });
