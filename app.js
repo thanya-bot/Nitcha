@@ -356,7 +356,6 @@ async function loadRatesFromSheet(silent) {
     const { text, via } = await fetchCsvWithFallback(url);
     const newHash = hashStr(text);
     if (newHash === _lastSheetHash) {
-      // ไม่มีการเปลี่ยนแปลง — แค่อัปเดต timestamp
       const stamp = new Date().toLocaleTimeString('th-TH');
       if (mini) {
         mini.textContent = `✓ ราคาตรงกับ Google Sheet • ${stamp}`;
@@ -370,16 +369,14 @@ async function loadRatesFromSheet(silent) {
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('ชีตไม่มีข้อมูล');
 
-    // แถวแรก = ขนาด BTU (col 0 มัก = label/ว่าง), แถวถัดมา = ชื่อบริการ + ราคาแต่ละ BTU
     const header = rows[0];
-    const sizeCols = []; // {col, sizeKey}
+    const sizeCols = [];
     for (let c = 1; c < header.length; c++) {
       const sz = normalizeSizeKey(header[c]);
       if (sz) sizeCols.push({ col: c, sizeKey: sz });
     }
     if (sizeCols.length === 0) throw new Error('ไม่พบขนาด BTU ในแถวบนสุด');
 
-    // สร้าง SIZES ใหม่ตามลำดับในชีต (ไม่ซ้ำ)
     const newSizes = [];
     const seenSize = new Set();
     for (const { sizeKey } of sizeCols) {
@@ -389,7 +386,6 @@ async function loadRatesFromSheet(silent) {
       }
     }
 
-    // สร้าง SERVICES ใหม่จากแถวล่าง
     const newServices = {};
     let cellCount = 0;
     for (let r = 1; r < rows.length; r++) {
@@ -415,7 +411,6 @@ async function loadRatesFromSheet(silent) {
     SIZES = newSizes;
     SERVICES = newServices;
 
-    // ลบรายการ items ที่อ้างถึง service/size ที่ไม่มีอีกแล้ว
     items = items.map(it => ({
       ...it,
       service: SERVICES[it.service] ? it.service : '',
@@ -424,11 +419,11 @@ async function loadRatesFromSheet(silent) {
 
     const stamp = new Date().toLocaleTimeString('th-TH');
     if (status) status.textContent = `อัปเดตราคาล่าสุด • ${Object.keys(SERVICES).length} บริการ × ${SIZES.length} ขนาด • ${stamp}`;
-    const mini = $('ratesStatus');
     if (mini) {
       mini.textContent = `✓ ราคาอัปเดตจาก Google Sheet • ${stamp}`;
       mini.style.color = '#166534';
     }
+    _ratesLoading = false;
     renderItems();
   } catch (err) {
     console.error('loadRatesFromSheet failed:', err);
@@ -437,11 +432,8 @@ async function loadRatesFromSheet(silent) {
       mini.textContent = '⚠ โหลดราคาไม่สำเร็จ: ' + err.message + ' — กำลังลองใหม่...';
       mini.style.color = '#B91C1C';
     }
-    // retry เร็วขึ้นเมื่อล้มเหลว
-    setTimeout(() => { _ratesLoading = false; loadRatesFromSheet(true); }, 3000);
-    return;
-  } finally {
     _ratesLoading = false;
+    setTimeout(() => loadRatesFromSheet(true), 3000);
   }
 }
 
@@ -627,6 +619,17 @@ function downloadPdf(b) {
 }
 
 // ===== History =====
+const BADGE_CLASSES = ['badge-clean', 'badge-repair', 'badge-install'];
+
+function getServiceBadgeClass(serviceKey) {
+  const k = String(serviceKey).toLowerCase();
+  if (k.includes('clean') || k.includes('ล้าง'))    return 'badge-clean';
+  if (k.includes('repair') || k.includes('ซ่อม'))   return 'badge-repair';
+  if (k.includes('install') || k.includes('ติดตั้ง')) return 'badge-install';
+  const idx = Object.keys(SERVICES).indexOf(serviceKey) % BADGE_CLASSES.length;
+  return BADGE_CLASSES[Math.max(0, idx)];
+}
+
 function renderHistory() {
   const wrap = $('historyTableWrap');
   const q = ($('historySearch').value || '').toLowerCase().trim();
@@ -661,7 +664,7 @@ function renderHistory() {
         ${list.map(b => {
           const svcSet = [...new Set(b.items.map(it => it.service))];
           const badges = svcSet.map(s => {
-            const cls = s === 'clean' ? 'badge-clean' : s === 'repair' ? 'badge-repair' : 'badge-install';
+            const cls = getServiceBadgeClass(s);
             const label = SERVICES[s]?.label || s;
             return `<span class="badge ${cls}">${esc(label)}</span>`;
           }).join(' ');
@@ -808,9 +811,9 @@ onReady(() => {
   const reloadBtn = $('reloadRatesBtn');
   if (reloadBtn) reloadBtn.addEventListener('click', () => loadRatesFromSheet(false));
 
-  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 5 วินาที (เรียลไทม์)
+  // ดึงราคาจากชีตทันทีที่เข้าหน้า + รีเฟรชอัตโนมัติทุก 30 วินาที
   loadRatesFromSheet(false);
-  setInterval(() => loadRatesFromSheet(true), 5000);
+  setInterval(() => loadRatesFromSheet(true), 30000);
   // ดึงใหม่ทันทีเมื่อผู้ใช้สลับกลับมาที่แท็บ / โฟกัสหน้าต่าง
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) loadRatesFromSheet(true);
